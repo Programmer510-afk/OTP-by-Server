@@ -10,8 +10,8 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// ✅ Google credentials setup
 const CREDENTIALS_PATH = path.join(__dirname, 'google-credentials.json');
-
 if (!fs.existsSync(CREDENTIALS_PATH)) {
   const credentialsJson = process.env.GOOGLE_CREDENTIALS_JSON;
   fs.writeFileSync(CREDENTIALS_PATH, credentialsJson);
@@ -19,10 +19,13 @@ if (!fs.existsSync(CREDENTIALS_PATH)) {
 
 const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
 const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
-const auth = new google.auth.GoogleAuth({ credentials, scopes });
+const auth = new google.auth.GoogleAuth({
+  credentials,
+  scopes,
+});
 const sheets = google.sheets({ version: 'v4', auth });
 
-// Nodemailer setup
+// ✅ Nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -31,11 +34,12 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// ✅ OTP Generator
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// ✅ OTP পাঠানো এবং ৩ মিনিট পর মুছে ফেলা
+// ✅ OTP Send Endpoint
 app.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -43,6 +47,7 @@ app.post('/send-otp', async (req, res) => {
 
     const otp = generateOTP();
 
+    // 🔔 Send OTP via email
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
@@ -53,7 +58,7 @@ app.post('/send-otp', async (req, res) => {
     const spreadsheetId = process.env.SHEET_ID;
     const sheetName = email;
 
-    // ✅ A3 সেলে OTP লিখে দাও
+    // 📥 Save OTP to A3
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${sheetName}!A3`,
@@ -63,7 +68,7 @@ app.post('/send-otp', async (req, res) => {
       },
     });
 
-    // ✅ ৩ মিনিট পরে A3 খালি করে দাও
+    // ⏱️ Remove OTP after 3 minutes (180000 ms)
     setTimeout(async () => {
       try {
         await sheets.spreadsheets.values.update({
@@ -74,15 +79,15 @@ app.post('/send-otp', async (req, res) => {
             values: [['']],
           },
         });
-        console.log(`✅ OTP deleted from ${sheetName}!A3`);
-      } catch (deleteErr) {
-        console.error(`❌ OTP delete failed for ${sheetName}:`, deleteErr.message);
+        console.log(`OTP cleared from ${email}'s sheet after 3 minutes.`);
+      } catch (clearError) {
+        console.error("Error clearing OTP after timeout:", clearError);
       }
-    }, 3 * 60 * 1000);
+    }, 180000); // 3 minutes
 
     res.json({ message: 'OTP sent and saved in Google Sheet' });
   } catch (error) {
-    console.error(error);
+    console.error("OTP Error:", error);
     res.status(500).json({ error: 'Something went wrong' });
   }
 });
