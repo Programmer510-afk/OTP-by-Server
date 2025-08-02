@@ -1,16 +1,17 @@
 {
   "name": "otp-server",
   "version": "1.0.0",
-  "description": "Node.js server to send OTP and store in Google Sheets",
+  "description": "Send OTP and write to Google Sheet",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": ["otp", "google-sheets", "nodejs", "express"],
-  "author": "Your Name",
-  "license": "MIT",
+  "keywords": ["otp", "google-sheets", "gmail", "render"],
+  "author": "YourName",
+  "license": "ISC",
   "dependencies": {
-    "dotenv": "^16.3.1",
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "googleapis": "^133.0.0",
     "nodemailer": "^6.9.8"
