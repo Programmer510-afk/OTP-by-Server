@@ -1,104 +1,97 @@
-const express = require('express');
-const nodemailer = require('nodemailer');
-const fs = require('fs');
-const { google } = require('googleapis');
-require('dotenv').config();
+const express = require("express");
+const nodemailer = require("nodemailer");
+const { google } = require("googleapis");
+const fs = require("fs");
+const path = require("path");
+const bodyParser = require("body-parser");
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(bodyParser.json());
 
-// Load Google credentials
-const credentials = JSON.parse(fs.readFileSync('google-credentials.json'));
+// Write google-credentials.json from base64 (for Render)
+const credentialsPath = path.join(__dirname, "google-credentials.json");
+if (!fs.existsSync(credentialsPath)) {
+  const base64 = process.env.GOOGLE_CREDENTIALS_BASE64;
+  const decoded = Buffer.from(base64, "base64").toString("utf8");
+  fs.writeFileSync(credentialsPath, decoded);
+}
+
 const auth = new google.auth.GoogleAuth({
-  credentials,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  keyFile: credentialsPath,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
-const sheets = google.sheets({ version: 'v4', auth });
 
-// Email setup
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  service: "gmail",
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
 });
 
-// Generate OTP
-function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
+// Generate random 6-digit OTP
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// POST route to receive email and send OTP
-app.post('/send-otp', async (req, res) => {
+app.post("/send-otp", async (req, res) => {
   const { email } = req.body;
-
-  if (!email) return res.status(400).json({ error: 'Email is required' });
+  if (!email) return res.status(400).json({ error: "Email is required" });
 
   const otp = generateOTP();
 
+  // Send OTP Email
   try {
-    // Send OTP email
     await transporter.sendMail({
-      from: `"OTP Server" <${process.env.EMAIL_USER}>`,
+      from: process.env.EMAIL_USER,
       to: email,
-      subject: 'Your OTP Code',
-      text: `Your OTP is: ${otp}`,
+      subject: "Your OTP Code",
+      text: `Your OTP is: ${otp}. It will expire in 3 minutes.`,
     });
+    console.log(`OTP ${otp} sent to ${email}`);
+  } catch (err) {
+    console.error("Email sending error:", err);
+    return res.status(500).json({ error: "Failed to send email" });
+  }
 
-    // Store OTP in Google Sheet
-    const spreadsheetId = process.env.SHEET_ID;
-    const rangeA1 = `${email}!A1`;
-    const rangeA3 = `${email}!A3`;
+  // Write OTP to Google Sheet
+  try {
+    const client = await auth.getClient();
+    const sheets = google.sheets({ version: "v4", auth: client });
 
-    // Check if sheet exists
-    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetExists = sheetMeta.data.sheets.some(
-      (s) => s.properties.title === email
-    );
-    if (!sheetExists) {
-      return res.status(404).json({ error: 'Sheet with this email not found' });
-    }
+    const sheetName = email; // Sheet name same as email
+    const sheetId = process.env.SHEET_ID;
 
-    // Double-check A1 has same email
-    const a1Res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: rangeA1,
-    });
-    if (a1Res.data.values?.[0]?.[0] !== email) {
-      return res.status(400).json({ error: 'A1 cell does not match email' });
-    }
-
-    // Write OTP to A3
     await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: rangeA3,
-      valueInputOption: 'RAW',
+      spreadsheetId: sheetId,
+      range: `${sheetName}!A3`,
+      valueInputOption: "RAW",
       requestBody: {
         values: [[otp]],
       },
     });
 
+    console.log(`OTP written to ${sheetName}!A3`);
+
     // Clear OTP after 3 minutes
     setTimeout(async () => {
       await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: rangeA3,
-        valueInputOption: 'RAW',
+        spreadsheetId: sheetId,
+        range: `${sheetName}!A3`,
+        valueInputOption: "RAW",
         requestBody: {
-          values: [['']],
+          values: [[""]],
         },
       });
-      console.log(`OTP for ${email} cleared`);
-    }, 3 * 60 * 1000);
-
-    res.status(200).json({ message: 'OTP sent and stored successfully' });
-  } catch (error) {
-    console.error('Error sending OTP:', error.message);
-    res.status(500).json({ error: 'Failed to send OTP' });
+      console.log(`OTP cleared from ${sheetName}!A3`);
+    }, 3 * 60 * 1000); // 3 minutes
+  } catch (err) {
+    console.error("Google Sheets error:", err);
+    return res.status(500).json({ error: "Failed to write to Google Sheet" });
   }
+
+  res.status(200).json({ message: "OTP sent and saved to sheet" });
 });
 
 app.listen(PORT, () => {
