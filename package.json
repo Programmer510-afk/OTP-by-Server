@@ -1,14 +1,11 @@
 {
   "name": "otp-server",
   "version": "1.0.0",
-  "description": "Send OTP and write to Google Sheet",
+  "description": "OTP system with Google Sheets and Nodemailer",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": ["otp", "google-sheets", "gmail", "render"],
-  "author": "YourName",
-  "license": "ISC",
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
