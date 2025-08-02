@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const { google } = require('googleapis');
+const cron = require('node-cron');
 
 const app = express();
 app.use(express.json());
@@ -73,13 +74,49 @@ app.post('/send-otp', async (req, res) => {
       },
     });
 
-    // 3 মিনিট পর A3 সেল খালি করার জন্য 3 মিনিট পরে কল করা যাবে (এখানে কোনো ব্যাকগ্রাউন্ড জব দেয়া হয়নি)
-    // প্রয়োজনে আলাদা টাস্ক/ক্রোন জব দরকার।
+    // ৩ মিনিট পরে OTP মুছে ফেলতে schedule করবো
+    setTimeout(async () => {
+      try {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${sheetName}!A3`,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: [['']],
+          },
+        });
+        console.log(`OTP cleared for ${email} after 3 minutes`);
+      } catch (clearErr) {
+        console.error('Error clearing OTP:', clearErr);
+      }
+    }, 3 * 60 * 1000); // ৩ মিনিট = ৩ * ৬০ * ১০০০ ms
 
     res.json({ message: 'OTP sent and saved in Google Sheet', otp }); // ডেভেলপমেন্টের জন্য otp রিটার্ন করা হয়েছে
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Something went wrong' });
+  }
+});
+
+// ** node-cron দিয়ে প্রতিদিন রাতে 12 টায় Google Sheets থেকে পুরানো OTP মুছে ফেলা (ঐচ্ছিক) **
+cron.schedule('0 0 * * *', async () => {
+  try {
+    const spreadsheetId = process.env.SHEET_ID;
+    // এখানে তুমি যদি একাধিক শিট এর OTP একসাথে ক্লিয়ার করতে চাও,
+    // তবে তাদের নাম গুলো নিয়ে লুপ চালিয়ে ক্লিয়ার করতে হবে
+
+    // উদাহরণ সরূপ, শুধুমাত্র একটা শিট ক্লিয়ার করো:
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Sheet1!A3`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [['']],
+      },
+    });
+    console.log('Daily cron job ran: OTP cleared from Sheet1');
+  } catch (err) {
+    console.error('Error running cron job:', err);
   }
 });
 
