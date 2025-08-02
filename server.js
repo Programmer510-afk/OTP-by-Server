@@ -2,29 +2,35 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const cors = require('cors');
 const nodemailer = require('nodemailer');
 const { google } = require('googleapis');
-const cron = require('node-cron');
 
 const app = express();
 app.use(express.json());
 
+// CORS সেটআপ (যেহেতু ফ্রন্টএন্ড অন্য জায়গা থেকে কল করতে পারে)
+app.use(cors());
+
+// Google credentials json path
 const CREDENTIALS_PATH = path.join(__dirname, 'google-credentials.json');
 
 // credentials ফাইল না থাকলে env থেকে তৈরি করবে
 if (!fs.existsSync(CREDENTIALS_PATH)) {
-  fs.writeFileSync(CREDENTIALS_PATH, process.env.GOOGLE_CREDENTIALS_JSON);
+  const credentialsJson = process.env.GOOGLE_CREDENTIALS_JSON;
+  fs.writeFileSync(CREDENTIALS_PATH, credentialsJson);
 }
 
+// Google API সেটআপ
 const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
 const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
 const auth = new google.auth.GoogleAuth({
   credentials,
   scopes,
 });
-
 const sheets = google.sheets({ version: 'v4', auth });
 
+// Nodemailer setup with Gmail SMTP
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -38,10 +44,7 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// OTP cache to store OTPs with timestamps (to clear after 3 min)
-const otpStore = {};
-
-// OTP পাঠানো API
+// OTP পাঠানোর এন্ডপয়েন্ট
 app.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -49,7 +52,7 @@ app.post('/send-otp', async (req, res) => {
 
     const otp = generateOTP();
 
-    // ইমেইল পাঠানো
+    // Nodemailer দিয়ে ইমেইল পাঠানো
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
@@ -57,54 +60,26 @@ app.post('/send-otp', async (req, res) => {
       text: `Your OTP is: ${otp}. It is valid for 3 minutes.`,
     });
 
-    // Google Sheet আপডেট
+    // Google Sheet ID
     const spreadsheetId = process.env.SHEET_ID;
-    const sheetName = email; // Email এর নাম sheet ধরে নিচ্ছি (তুমি sheetName পরিবর্তন করতে পারো)
+    const sheetName = email;
 
+    // OTP Google Sheets এ আপডেট করা
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${sheetName}!A3`,
       valueInputOption: 'RAW',
-      requestBody: { values: [[otp]] },
+      requestBody: {
+        values: [[otp]],
+      },
     });
 
-    // OTP স্টোরে রাখো এবং টাইম সেট করো
-    otpStore[email] = { otp, timestamp: Date.now() };
-
-    res.json({ message: 'OTP sent and saved in Google Sheet', otp }); // dev purpose otp রিটার্ন করলাম
+    res.json({ message: 'OTP sent and saved in Google Sheet' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Something went wrong' });
   }
 });
 
-// ৩ মিনিট পর OTP মুছে ফেলার জন্য cron job (প্রতি মিনিটে চেক করবে)
-cron.schedule('* * * * *', async () => {
-  const now = Date.now();
-  const spreadsheetId = process.env.SHEET_ID;
-
-  for (const email in otpStore) {
-    const data = otpStore[email];
-    // যদি 3 মিনিট হয়ে যায়
-    if (now - data.timestamp > 3 * 60 * 1000) {
-      try {
-        // Google Sheet থেকে OTP মুছে ফেলো
-        await sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: `${email}!A3`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [['']] },
-        });
-
-        // otpStore থেকে ডিলিট করো
-        delete otpStore[email];
-        console.log(`Cleared OTP for ${email}`);
-      } catch (err) {
-        console.error('Error clearing OTP:', err);
-      }
-    }
-  }
-});
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`OTP Server running on port ${PORT}`));
