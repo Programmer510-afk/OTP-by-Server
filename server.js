@@ -1,99 +1,87 @@
-const express = require("express");
-const nodemailer = require("nodemailer");
-const { google } = require("googleapis");
-const fs = require("fs");
-const path = require("path");
-const bodyParser = require("body-parser");
-require("dotenv").config();
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const express = require('express');
+const nodemailer = require('nodemailer');
+const { google } = require('googleapis');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
 
-app.use(bodyParser.json());
+// Google credentials json path
+const CREDENTIALS_PATH = path.join(__dirname, 'google-credentials.json');
 
-// Write google-credentials.json from base64 (for Render)
-const credentialsPath = path.join(__dirname, "google-credentials.json");
-if (!fs.existsSync(credentialsPath)) {
-  const base64 = process.env.GOOGLE_CREDENTIALS_BASE64;
-  const decoded = Buffer.from(base64, "base64").toString("utf8");
-  fs.writeFileSync(credentialsPath, decoded);
+// credentials ফাইল না থাকলে env থেকে তৈরি করবে
+if (!fs.existsSync(CREDENTIALS_PATH)) {
+  const credentialsJson = process.env.GOOGLE_CREDENTIALS_JSON;
+  fs.writeFileSync(CREDENTIALS_PATH, credentialsJson);
 }
 
+// Google API সেটআপ
+const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
+const scopes = ['https://www.googleapis.com/auth/spreadsheets'];
 const auth = new google.auth.GoogleAuth({
-  keyFile: credentialsPath,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  credentials,
+  scopes,
 });
+const sheets = google.sheets({ version: 'v4', auth });
 
+// Nodemailer setup with Gmail SMTP
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: process.env.EMAIL_USER,      // যেমন: bdpbdchecker11@gmail.com
+    pass: process.env.EMAIL_PASS,      // Gmail app password
   },
 });
 
-// Generate random 6-digit OTP
-const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+// OTP জেনারেটর ফাংশন
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
-app.post("/send-otp", async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: "Email is required" });
-
-  const otp = generateOTP();
-
-  // Send OTP Email
+// OTP পাঠানো এবং শিট আপডেট করার API
+app.post('/send-otp', async (req, res) => {
   try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    // OTP তৈরি
+    const otp = generateOTP();
+
+    // ইমেইল পাঠানো
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
-      subject: "Your OTP Code",
-      text: `Your OTP is: ${otp}. It will expire in 3 minutes.`,
+      subject: 'Your OTP Code',
+      text: `Your OTP is: ${otp}. It is valid for 3 minutes.`,
     });
-    console.log(`OTP ${otp} sent to ${email}`);
-  } catch (err) {
-    console.error("Email sending error:", err);
-    return res.status(500).json({ error: "Failed to send email" });
-  }
 
-  // Write OTP to Google Sheet
-  try {
-    const client = await auth.getClient();
-    const sheets = google.sheets({ version: "v4", auth: client });
+    // Google Sheet ID (তোমার .env এর মধ্যে থাকবে)
+    const spreadsheetId = process.env.SHEET_ID;
 
-    const sheetName = email; // Sheet name same as email
-    const sheetId = process.env.SHEET_ID;
+    // শীট নাম হিসেবে email ধরে নেওয়া হয়েছে
+    const sheetName = email;
 
+    // A3 সেলে OTP আপডেট করা
     await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetId,
+      spreadsheetId,
       range: `${sheetName}!A3`,
-      valueInputOption: "RAW",
+      valueInputOption: 'RAW',
       requestBody: {
         values: [[otp]],
       },
     });
 
-    console.log(`OTP written to ${sheetName}!A3`);
+    // 3 মিনিট পর A3 সেল খালি করার জন্য 3 মিনিট পরে কল করা যাবে (এখানে কোনো ব্যাকগ্রাউন্ড জব দেয়া হয়নি)
+    // প্রয়োজনে আলাদা টাস্ক/ক্রোন জব দরকার।
 
-    // Clear OTP after 3 minutes
-    setTimeout(async () => {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: sheetId,
-        range: `${sheetName}!A3`,
-        valueInputOption: "RAW",
-        requestBody: {
-          values: [[""]],
-        },
-      });
-      console.log(`OTP cleared from ${sheetName}!A3`);
-    }, 3 * 60 * 1000); // 3 minutes
-  } catch (err) {
-    console.error("Google Sheets error:", err);
-    return res.status(500).json({ error: "Failed to write to Google Sheet" });
+    res.json({ message: 'OTP sent and saved in Google Sheet', otp }); // ডেভেলপমেন্টের জন্য otp রিটার্ন করা হয়েছে
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Something went wrong' });
   }
-
-  res.status(200).json({ message: "OTP sent and saved to sheet" });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
