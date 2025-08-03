@@ -10,7 +10,7 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ✅ Google credentials setup
+// ✅ Google credentials সেটআপ
 const CREDENTIALS_PATH = path.join(__dirname, 'google-credentials.json');
 if (!fs.existsSync(CREDENTIALS_PATH)) {
   const credentialsJson = process.env.GOOGLE_CREDENTIALS_JSON;
@@ -25,7 +25,7 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
-// ✅ Nodemailer
+// ✅ Nodemailer সেটআপ
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -34,12 +34,19 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ✅ OTP Generator
+// ✅ OTP জেনারেটর ফাংশন
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// ✅ OTP Send Endpoint
+// ✅ শীটের নামকে নিরাপদ করতে sanitize করার ফাংশন
+function sanitizeSheetName(email) {
+  // অক্ষর, সংখ্যা ছাড়া সব কিছু '_' দিয়ে রিপ্লেস করবে
+  // গুগল শীটের শীট নামের লিমিট 100 ক্যারেক্টার, তাই কাটা হয়েছে
+  return email.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 100);
+}
+
+// ✅ OTP পাঠানোর API এন্ডপয়েন্ট
 app.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -47,7 +54,7 @@ app.post('/send-otp', async (req, res) => {
 
     const otp = generateOTP();
 
-    // 🔔 Send OTP via email
+    // 🔔 ইমেইলে OTP পাঠানো
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
@@ -56,9 +63,11 @@ app.post('/send-otp', async (req, res) => {
     });
 
     const spreadsheetId = process.env.SHEET_ID;
-    const sheetName = email;
 
-    // 📥 Save OTP to A3
+    // 🛡️ ইমেইল থেকে নিরাপদ শীট নাম তৈরি করা হচ্ছে
+    const sheetName = sanitizeSheetName(email);
+
+    // 📥 OTP A3 সেলে সংরক্ষণ করা হচ্ছে
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${sheetName}!A3`,
@@ -68,7 +77,7 @@ app.post('/send-otp', async (req, res) => {
       },
     });
 
-    // ⏱️ Remove OTP after 3 minutes (180000 ms)
+    // ⏱️ ৩ মিনিট পর OTP মুছে ফেলা হবে
     setTimeout(async () => {
       try {
         await sheets.spreadsheets.values.update({
@@ -83,7 +92,7 @@ app.post('/send-otp', async (req, res) => {
       } catch (clearError) {
         console.error("Error clearing OTP after timeout:", clearError);
       }
-    }, 180000); // 3 minutes
+    }, 180000); // ৩ মিনিট
 
     res.json({ message: 'OTP sent and saved in Google Sheet' });
   } catch (error) {
